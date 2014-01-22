@@ -1,0 +1,416 @@
+#RequireContext CSmMode
+
+#Include "MathLib" as MathLib
+#Include "TextLib" as TextLib
+#Include "Libs/Nadeo/Mode.Script.txt" as Mode
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/Shootmania/Airshot.Script.txt" as Airshot
+
+#Const	CompatibleMapTypes	"MeleeArena"
+#Const	Version				"2013-08-10"
+
+#Setting	TimeLimit			300	  
+
+#Const	C_UITickInterval	200	///< Time interval between UI update
+
+#Setting NbBots 			0         as "NumberOfBots"
+#Setting KillsForNextWeapon 5         as "KIllsForNextWeapon" 
+#Setting Weapon1			"Rocket"  as "Weapon1"
+#Setting Weapon2			"Arrow"   as "Weapon2"
+#Setting Weapon3			"Nucleus" as "Weapon3"
+#Setting Weapon4			"Laser"   as "Weapon4"
+// Possible Weapons: "Laser", "Rocket", "Nucleus", "Arrow"
+#Setting RocketAmmoMax	    4	      as "Maximum Ammo for Rocket"
+#Setting LaserAmmoMax	    1	      as "Maximum Ammo for Laser"
+#Setting ArrowAmmoMax	    1	      as "Maximum Ammo for Arrow"
+#Setting NucleusAmmoMax	    1	      as "Maximum Ammo for Nucleus"
+#Setting RespawnTime	    3000      as "RespawnTime"
+
+#Const C_ActionEvent_SwitchWeapon "SwitchWeapon"
+
+
+
+***UIPlayer***
+***
+UI.BigMessage = Airshot::Message(Player);
+UI.StatusMessage = "";
+***
+
+***Rules***
+***
+declare ModeName = "Gungame";
+declare ModeRules = """
+-you get a new weapon after x kills
+-the player, who mastered all weapons, has won
+""";
+***
+
+
+/* ------------------------------------- */
+/** Update the infos UI of a player
+ *
+ * @param	_Player		The player to update
+ *
+ * @return		The ManiaLink string
+ */
+Text UpdateLayerInfos(CSmPlayer _Player) {
+	if (_Player.Score == Null) return "";
+	
+	return """
+		<frame posn="150 -88">
+			<label posn="0 1" halign="left" valign="bottom" text="/{{{ Scores.count }}}"/>
+			<label posn="0 0" halign="right" valign="bottom" style="TextRaceChrono" text="{{{ Scores.keyof(_Player.Score) + 1 }}}"/>
+		</frame>
+	""";
+}
+
+/* ------------------------------------- */
+/** Get the help manialink string.
+ *
+ * @return		The manialink string
+ */
+Text UpdateLayerSpawnScreen() {
+	declare Text ML;
+	
+	---Rules---
+	
+	ML = """
+		<script><!--
+			main () {
+				declare FrameRules	<=> Page.GetFirstChild("FrameRules");
+				declare FrameShow	<=> Page.GetFirstChild("FrameShow");
+				declare ShowRules = False;
+					
+				while(True) {
+					if (ShowRules) {
+						FrameRules.Show();
+						FrameShow.Hide();
+					} else {
+						FrameRules.Hide();
+						FrameShow.Show();
+					}
+
+					yield;
+
+					// process events.
+					foreach (Event in PendingEvents) {
+						switch (Event.Type) {
+							case CMlEvent::Type::MouseClick :
+							{		
+								if (Event.ControlId == "FrameRules") ShowRules = !ShowRules;
+							}
+					
+							case CMlEvent::Type::KeyPress:
+							{
+								if (Event.CharPressed == "2424832") ShowRules = !ShowRules;	// F1
+							}
+						}
+					}
+				}
+			}
+		--></script>
+		<frame posn="0 -70 0" id="FrameShow">
+			<quad posn="0 0 10" sizen="140 20" halign="center" valign="center" style="Bgs1InRace" substyle="BgTitle3_5" />
+			<label posn="0 0 11" scale="2" halign="center" valign="center" style="TextTitle3" text="Press F1 to show rules" />
+		</frame>
+		<frame posn="0 50 1" id="FrameRules"> 
+			<frame posn="0 0 5">
+				<quad posn="0 0 10" sizen="120 20" halign="center" valign="center" style="Bgs1InRace" substyle="BgTitle3_5" />
+				<label posn="0 0 11" scale="2" halign="center" valign="center" style="TextTitle3" text="$fff{{{ ModeName }}}" />
+			</frame>
+			<frame posn="0 -10 5">
+				<quad posn="0 0 10" sizen="300 120" halign="center" bgcolor="222c" />
+				<label posn="-145 -5 11" sizen="145 5" scale="2" autonewline="1" style="TextCardSmallScores2" text="{{{ ModeRules }}}" />
+			</frame>
+		</frame>
+	""";
+	
+	return ML;
+}
+
+/* ------------------------------------- */
+/** Update the Scores in Spawn manialink
+ *
+ *	@return		The manialink string
+ */
+Text UpdateLayerScoresInSpawn() {
+	declare Top3 = "";
+	declare I = 0;
+	declare Icons = ["First", "Second", "Third"];
+	
+	foreach (Score in Scores) {
+		declare Pseudo = TextLib::MLEncode(Score.User.Name);
+		
+		Top3 ^=
+"""
+<frame posn="-140 {{{ I * -30 }}} -25">
+	<quad posn="0 -2" sizen="30 30" valign="center" style="Icons64x64_1" substyle="{{{ Icons[I] }}}" />
+	<label posn="30 0" sizen="200 20" textsize="15" valign="center" text="{{{ Pseudo }}}" />
+	<label posn="270 0" sizen="20 20" textsize="15" halign="right" valign="center" text="{{{ Score.RoundPoints }}}" />
+</frame>
+""";
+		I += 1;
+		if (I >= 3) break;
+	}
+	
+	return 
+"""
+<frame posn="0 85 -20">
+	<frame posn="0 -65">
+		<quad posn="0 15 -30" sizen="290 92" halign="center" bgcolor="222c" />
+		{{{ Top3 }}}
+	</frame>
+</frame>
+""";
+}
+
+// Check, if player is ready for next weapon
+Boolean NeedPlayerNextWeapon (CSmPlayer Player, Integer GapKills, Integer Level)
+{
+    if (Player.Score != Null)
+	{
+		if (Player.Score.RoundPoints / GapKills >= Level)
+		{
+			return True;
+		}
+	}
+	return False;
+}
+
+/* ------------------------------------- */
+// Main
+/* ------------------------------------- */
+main() {
+
+	UseClans = False;
+	declare Text[Integer] Weapons;
+	declare Integer GapKills = 0;
+	declare Integer[Ident] PlayersLevels;
+	
+	declare LayerSpawnScreen <=> UIManager.UILayerCreate();
+	LayerSpawnScreen.Type = CUILayer::EUILayerType::ScreenIn3d;
+	
+	
+	while (!ServerShutdownRequested) {
+	
+		Mode::LoadMap();
+		
+		Score::MatchBegin();
+		Score::RoundBegin();
+		
+		MatchEndRequested = False;
+		
+		UIManager.ResetAll();
+		SM::SetupDefaultVisibility();
+		LayerSpawnScreen.ManialinkPage = UpdateLayerSpawnScreen();
+		UIManager.UIAll.UILayers.add(LayerSpawnScreen);
+		
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::Intro;
+		UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::StartRound;
+		UIManager.UIAll.BigMessageSoundVariant = 0;
+		UIManager.UIAll.BigMessage = _("New match");
+		wait(UIManager.UIAll.UISequenceIsCompleted);
+		
+		UIManager.UIAll.BigMessage = "";
+		
+		GapKills = KillsForNextWeapon;
+
+	    UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+	    declare LastUITick = 0;
+	    SetNbFakePlayers ( 0, NbBots);
+		StartTime = Now + RespawnTime;
+		EndTime = StartTime + (TimeLimit * 1000);
+		
+        Weapons[1] = Weapon1;
+        Weapons[2] = Weapon2;
+        Weapons[3] = Weapon3;
+        Weapons[4] = Weapon4;
+		
+		foreach (Player in AllPlayers)
+		{
+			SetPlayerAmmoMax (Player, CSmMode::EWeapon::Rocket, RocketAmmoMax);
+		    SetPlayerAmmoMax (Player, CSmMode::EWeapon::Laser, LaserAmmoMax);
+		    SetPlayerAmmoMax (Player, CSmMode::EWeapon::Nucleus, NucleusAmmoMax);
+		    SetPlayerAmmoMax (Player, CSmMode::EWeapon::Arrow, ArrowAmmoMax);
+			PlayersLevels[Player.Id] = 1;
+			Player.ArmorMax = 100;
+		}
+		
+		// Start Match
+		while (!MatchEndRequested && !ServerShutdownRequested) {
+		    yield;
+			
+			// Eventhandling
+			foreach (Event, PendingEvents) {
+				if (Event.Type == CSmModeEvent::EType::OnArmorEmpty) 
+				    PassOn(Event);
+				else if (Event.Type == CSmModeEvent::EType::OnHit) {
+				    if ((Event.Shooter == Null) || (Event.Victim == Null) || (Event.Shooter == Event.Victim))
+					    Discard (Event);
+					else
+					{
+    					if (Event.Damage > 0) {
+						    Score::AddPoints( Event.Shooter, 1);									
+						    Airshot::OnHit(Event.Shooter, Event.Victim);
+							PassOn (Event);
+						}
+					}
+				} else if (Event.Type == CSmModeEvent::EType::OnPlayerRequestRespawn) {
+					PassOn(Event);
+				} else if (Event.Type == CSmModeEvent::EType::OnPlayerAdded) {
+				    PlayersLevels[Event.Player.Id] = 1;
+					PassOn(Event);
+				} else {
+					PassOn(Event);
+				}
+			}
+			
+			// RespawnPlayers
+			foreach (Player in AllPlayers)
+			{
+				// did player enough kills for next weapon
+			    if (NeedPlayerNextWeapon (Player, GapKills, PlayersLevels[Player.Id]))
+				{
+					PlayersLevels[Player.Id] += 1; 
+					UnspawnPlayer (Player);
+					/*switch (Weapons[PlayersLevels[Player.Id]])
+					{
+					    case "Rocket":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);
+						}
+					    case "Laser":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Laser, False);
+						}
+					    case "Nucleus":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Nucleus, False);
+						}
+					    case "Arrow":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Arrow, False);
+						}
+						default:
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);
+						}
+					}*/
+				}
+				
+			    if ((Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) && (PlayersLevels[Player.Id] < 5) && (!Player.RequestsSpectate))
+				{
+				    // Set Player's Weapon
+					switch (Weapons[PlayersLevels[Player.Id]])
+					{
+					    case "Rocket":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);
+						}
+					    case "Laser":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Laser, False);
+						}
+					    case "Nucleus":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Nucleus, False);
+						}
+					    case "Arrow":
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Arrow, False);
+						}
+						default:
+						{
+						    SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);
+						}
+					}
+				    SpawnPlayer (Player, 0, 100, BlockSpawns[MathLib::Rand(0, BlockSpawns.count-1)], Now + RespawnTime);
+					Player.AmmoGain = 1.0;
+				}
+			}
+			
+			// Update UI
+			if (LastUITick + C_UITickInterval < Now) {
+				declare UsedLayers = Ident[];
+				
+				// Add layer and create it if necessary
+				foreach (Player in Players) {
+					declare UI <=> UIManager.GetUI(Player);
+					if (UI == Null) continue;
+					
+					declare CUILayer LayerInfos;
+					if (UI.UILayers.count != 1) {
+						LayerInfos <=> UIManager.UILayerCreate();
+						UI.UILayers.add(LayerInfos);
+					} else {
+						LayerInfos <=> UI.UILayers[0];
+					}
+					UsedLayers.add(LayerInfos.Id);
+					LayerInfos.ManialinkPage = UpdateLayerInfos(Player);
+					UI.StatusMessage = TextLib::ToText (Player.Score.RoundPoints - GapKills * (PlayersLevels[Player.Id]-1)) ^ "/" ^ TextLib::ToText (GapKills) ^ " Kills";
+				}
+				// Remove layers
+				declare LayersToRemove = Ident[];
+				foreach (Layer in UIManager.UIAll.UILayers) { UsedLayers.add(Layer.Id); }
+			    foreach (Layer in UIManager.UILayers) {
+					if (!UsedLayers.exists(Layer.Id)) {
+						LayersToRemove.add(Layer.Id);
+					}
+				}
+			    foreach (LayerId in LayersToRemove) {
+				    UIManager.UILayerDestroy(UIManager.UILayers[LayerId]);
+			    }
+			
+		        LastUITick = Now;
+		    }
+			
+		    // Match End Condition
+			foreach (Player in Players)
+			{
+			    if (Player.Score.RoundPoints >= GapKills * 4)
+				    MatchEndRequested = True;
+			}
+
+		}
+		Score::MatchEnd(True);
+		
+		/* -------------------------------------- */
+		// End match sequence
+		declare CUser Winner <=> Null;
+		declare MaxPoints = 0;
+		foreach (Score in Scores) {
+			if (Score.RoundPoints > MaxPoints) {
+				MaxPoints = Score.RoundPoints;
+				Winner <=> Score.User;
+			} else if (Score.RoundPoints == MaxPoints) {
+				Winner <=> Null;
+			}
+		}
+		foreach (Player in AllPlayers) {
+			UnspawnPlayer(Player);
+		}
+		
+		UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::EndRound;
+		UIManager.UIAll.BigMessageSoundVariant = 0;
+		if (Winner != Null) {
+			UIManager.UIAll.BigMessage = TextLib::Compose(_("$<%1$> wins the match!"), Winner.Name);
+		} else {
+			UIManager.UIAll.BigMessage = _("|Match|Draw");
+		}
+		sleep(2000);
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+		UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+		sleep(5000);
+		
+		UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+		wait(UIManager.UIAll.UISequenceIsCompleted);
+		
+		UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+		UIManager.UIAll.BigMessage = "";
+		
+		Mode::UnloadMap();
+	}
+	
+	UIManager.UILayerDestroy(LayerSpawnScreen);
+}
