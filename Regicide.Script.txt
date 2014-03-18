@@ -1,0 +1,428 @@
+/*---------------------
+Mode: Regicide
+Author: racer_simon
+---------------------*/
+
+#Extends "Modes/Shootmania/ModeBase.Script.txt"
+
+#Include "TextLib" as TextLib
+#Include "MathLib" as MathLib
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+#Include "Libs/Nadeo/Victory.Script.txt" as Victory
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/Airshot.Script.txt" as Airshot
+#Include "Libs/Nadeo/ShootMania/BalancedWeapons.Script.txt" as BalancedWeapons
+#Include "Libs/Nadeo/Shootmania/AFK.Script.txt" as AFK
+#Include "Libs/Nadeo/Shootmania/SpawnScreen.Script.txt" as SpawnScreen
+#Include "Libs/Nadeo/Message.Script.txt" as Message
+
+#Const CompatibleMapTypes "TeamDeathmatchArena" 
+#Const Version			  "2014-3-14"
+#Const UITickPeriod	   	   200
+#Const ScriptName		  "Regicide.Script.txt"
+
+#Setting S_RespawnTime		   1000  as "RespawnTime (in milliseconds)"
+#Setting S_RoundStartDelay 	   5000	  as "RoundStartDelay (in milliseconds)"
+#Setting S_AutoBalance		   True	  as "AutoBalance"
+#Setting S_RoundsToWin		   3	  as "RoundsToWin"
+#Setting S_RoundGapToWin	   1	  as "RoundGapToWin"
+#Setting S_RoundsLimit		   5	  as "RoundsLimit"
+#Setting S_TimeLimit		   180    as "TimeLimit (in seconds)"
+#Setting S_FriendlyFire	       False  as "FriendlyFire"
+#Setting S_PlayerArmor		   200    as "PlayerArmor"
+#Setting S_KingArmor 	       1000   as "KingArmor"
+#Setting S_KingAmmoGain		   1.0	  as "KingAmmoGain"
+#Setting S_MaxIdleDuration	   30     as "MaxIdleDuration (in seconds)"
+#Setting S_NbBlueBots		   0	  as "NbBlueBots"
+#Setting S_NbRedBots		   0	  as "NbRedBots"
+
+declare CSmPlayer[Integer] Kings;
+declare CSmPlayer[] PlayersClan1;
+declare CSmPlayer[] PlayersClan2;
+declare Integer ClanSide1;
+declare Integer ClanSide2;
+declare CSmBlockSpawn[Integer] Side1Spawn;
+declare CSmBlockSpawn[Integer] Side2Spawn;
+declare Boolean KingDied;
+declare Integer RegicideClan;
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(AFK::GetScriptName(), AFK::GetScriptVersion());
+MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
+MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
+MB_LogVersion(Victory::GetScriptName(), Victory::GetScriptVersion());
+MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
+MB_LogVersion(BalancedWeapons::GetScriptName(), BalancedWeapons::GetScriptVersion());
+***
+
+***SleepLoop***
+***
+Message::Loop ();
+***
+	
+***InitServer***
+***
+//MB_UseLogging = True;
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+UseClans = True;
+declare LayerRoundInfo <=> UIManager.UILayerCreate();
+***
+
+***StartServer***
+***
+declare ModeName = "Regicide";
+declare ModeRules = "-kill the opponent king to win the round";
+SpawnScreen::CreateRules (ModeName, ModeRules);
+SpawnScreen::CreateScores();
+SpawnScreen::CreateMapInfo();
+MB_UseSectionRound = True;
+***
+
+***InitMap***
+***
+Score::MatchBegin(False);	
+Airshot::MatchBegin();
+BalancedWeapons::MatchBegin();
+Victory::MatchBegin();
+if(S_AutoBalance) 
+	AutoTeamBalance();
+Mode::Ladder_OpenMatch_All();
++++MatchBegin+++	
+		
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Intro;
+
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+
+declare Integer i = 1;
+declare Integer j = 1;
+foreach (Spawn in BlockSpawns) 
+{
+    if (Spawn.Order == 1) {
+	    Side1Spawn[i] = Spawn;
+ 		i += 1;
+	} else if (Spawn.Order == 2) {
+	    Side2Spawn[j] = Spawn;
+		j += 1;
+	}
+}
+***
+
+***InitRound***
+***
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+Score::RoundBegin();	
+Airshot::RoundBegin();
+BalancedWeapons::RoundBegin();
+Victory::RoundBegin();
++++RoundBegin+++
+			
+// Set Nb of Bots
+SetNbFakePlayers (S_NbBlueBots, S_NbRedBots);
+UpdatePlayersClanArrays ();
+ChooseKings ();
+		
+ClanSide1 = (MB_SectionRoundNb % 2) + 1;
+ClanSide2 = 2 - (MB_SectionRoundNb % 2);
+KingDied = False;
+RegicideClan = 0;
+UIManager.UIAll.BigMessage = "";
+***
+
+***StartRound***
+***
+SM::SetupDefaultVisibility ();
+declare LatestUITick = Now;
+StartTime = Now + S_RoundStartDelay;
+EndTime = StartTime + S_TimeLimit * 1000;
+SpawnPlayers ();
+***
+
+***PlayLoop***
+***
+ProcessEvents ();
+SM::UnspawnPlayersChangingClan();		
+foreach(Player in Players) 
+{
+    Player.IsHighlighted = Player.Armor > 0;
+}
+AFK::ManageAFKPlayers (S_MaxIdleDuration * 1000, 0);
+RespawnPlayers ();
+CheckRoundEndConditions ();
+***
+
+***EndRound***
+***
+MB_Sleep (3000);
+StartTime = -1;
+EndTime = -1;
+
+if (Victory::IsRoundWinner(1)) 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose (Teams[0].ColorizedName ^ " wins the round");	
+	ClanScores[1] += 1;			
+} 
+else if (Victory::IsRoundWinner(2)) 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose (Teams[1].ColorizedName ^ " wins the round");
+	ClanScores[2] += 1;
+} 
+else 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose ("This round is a draw");
+}
+
+Victory::SetMatchWinnerFromScore(S_RoundsToWin, S_RoundGapToWin, S_RoundsLimit);
+
+foreach (Player in AllPlayers)
+{
+	UnspawnPlayer (Player);
+}
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+			
+MB_Sleep (5000);
+
+Score::RoundEnd();			
+Airshot::RoundEnd();
+BalancedWeapons::RoundEnd();
+Victory::RoundEnd();	
+
+CheckMatchEndConditions ();
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+***
+
+***EndMap***
+***
+UIManager.ResetAll();
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Outro;
+
+declare WinnerClan = -1;
+if ( Victory::IsMatchWinner(1) ) 
+{
+	UIManager.UIAll.BigMessage = Teams[0].ColorizedName ^ " wins the match";
+	WinnerClan = 1;
+} 
+else if (  Victory::IsMatchWinner(2) ) 
+{
+	UIManager.UIAll.BigMessage = Teams[1].ColorizedName ^ " wins the match";
+	WinnerClan = 2;
+}
+		
+MB_Sleep(6*1000);
+
+if(WinnerClan != -1)
+{
+	// Reset score clans
+	foreach (Score in Scores) { declare Integer Clan for Score; Clan = 0; }	
+	foreach (Player in Players) {
+		if (Player.Score == Null) continue;
+		declare Integer Clan for Player.Score;
+		Clan = Player.CurrentClan;				
+	}
+	// Sort scores by clan
+	declare ClanScoresSorted = [1=>CSmScore[], 2=>CSmScore[]];	
+	foreach (Score in Scores) {
+		Score.LadderRankSortValue = 1000;
+		declare Integer Clan for Score;
+		if (Clan != 1 && Clan != 2) continue;
+		ClanScoresSorted[Clan].add(Score);				
+	}	
+	declare Shift = [1=>1, 2=>1];
+	Shift[3 - WinnerClan] = 2;			
+	foreach(Index => Score in ClanScoresSorted[1]) {Score.LadderRankSortValue = Index * 2 + Shift[1];}
+	foreach(Index => Score in ClanScoresSorted[2]) {Score.LadderRankSortValue = Index * 2 + Shift[2];}			
+	
+	Mode::Ladder_CloseMatch();
+} 
+else 
+	Mode::Ladder_CancelMatch();
+		
++++EndMatch+++
+Score::MatchEnd();
+Airshot::MatchEnd();
+BalancedWeapons::MatchEnd();
+Victory::MatchEnd();	
+
+UIManager.UIAll.BigMessage = "";
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;				
+
+MB_Sleep(10*1000);
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.UILayers.clear();
+MB_Sleep(1*1000);
+	
+MatchEndRequested = False;
+***
+
+***EndServer***
+***
+SpawnScreen::DestroyRules ();
+SpawnScreen::DestroyScores ();
+SpawnScreen::DestroyMapInfo( );
+UIManager.UILayerDestroy(LayerRoundInfo);
+***
+
+Void SpawnPlayers ()
+{
+	foreach (Player in AllPlayers) 
+	{
+		if ((Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) && (!Player.RequestsSpectate)) 
+		{	
+			// Set Player Weapon and Armor
+			if (Player == Kings[Player.RequestedClan])
+			{
+				Player.ArmorMax = S_KingArmor;
+				Player.AmmoGain = S_KingAmmoGain;
+				SetPlayerWeapon (Player, CSmMode::EWeapon::Laser, False);
+			}
+			else
+			{
+				Player.ArmorMax = S_PlayerArmor;
+				Player.AmmoGain = 1.0;			
+				SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, True);
+			}
+			
+			// Spawn Player
+			if (Player.RequestedClan == ClanSide1) 							
+				SM::SpawnPlayer (Player, Player.RequestedClan, Player.ArmorMax, Side1Spawn[MathLib::Rand ( 1, Side1Spawn.count)], Now + S_RoundStartDelay);
+			else if (Player.RequestedClan == ClanSide2) 							
+				SM::SpawnPlayer (Player, Player.RequestedClan, Player.ArmorMax, Side2Spawn[MathLib::Rand ( 1, Side2Spawn.count)], Now + S_RoundStartDelay);
+		}	
+	}
+}
+	
+Void RespawnPlayers ()
+{
+	foreach (Player in AllPlayers) 
+	{
+		if ((Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) && (!Player.RequestsSpectate)) 
+		{	
+			// Set Player Weapon and Armor
+			if (Player != Kings[Player.RequestedClan])
+			{
+				Player.ArmorMax = S_PlayerArmor;
+				Player.AmmoGain = 1.0;			
+				SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, True);
+			}
+			
+			// Spawn Player
+			if (Player.RequestedClan == ClanSide1) 							
+				SM::SpawnPlayer (Player, Player.RequestedClan, Player.ArmorMax, Side1Spawn[MathLib::Rand ( 1, Side1Spawn.count)], Now + S_RespawnTime);
+			else if (Player.RequestedClan == ClanSide2) 							
+				SM::SpawnPlayer (Player, Player.RequestedClan, Player.ArmorMax, Side2Spawn[MathLib::Rand ( 1, Side2Spawn.count)], Now + S_RespawnTime);
+		}	
+	}
+}
+
+Void ProcessEvents ()
+{
+	foreach (Event, PendingEvents) 
+	{
+		if( Event.Type == CSmModeEvent::EType::OnHit ) 
+		{				
+	        if ( Event.Shooter == Null || Event.Victim == Null || Event.Shooter == Event.Victim ) 
+			    Discard(Event);
+			else if ((UseClans) && (Event.Shooter.CurrentClan == Event.Victim.CurrentClan)) 
+			{
+				if (S_FriendlyFire)
+				{
+					if(Event.Damage > 0) {
+						Score::AddPoints (Event.Shooter, Event.Damage / (-100));									
+						Airshot::OnHit(Event.Shooter, Event.Victim);
+					}
+					PassOn(Event);
+				}
+				else
+					Discard(Event);
+		    }
+			else 
+			{			
+    			if(Event.Damage > 0) {
+				    Score::AddPoints (Event.Shooter, Event.Damage / 100);									
+				    Airshot::OnHit(Event.Shooter, Event.Victim);
+				}
+				PassOn(Event);
+			}
+		}
+		else if (Event.Type == CSmModeEvent::EType::OnArmorEmpty) 
+		{
+			if (Event.Victim == Kings[Event.Victim.CurrentClan])
+			{
+				KingDied = True;
+				RegicideClan = (Event.Victim.CurrentClan % 2) + 1; 
+			}
+			BalancedWeapons::OnOut(Event.Shooter, Event.Victim);
+		    PassOn(Event);												
+		}
+		else 
+			PassOn(Event);
+	}
+}
+
+Void CheckRoundEndConditions ()
+{
+	if (KingDied)
+	{
+		Victory::SetRoundWinnerIfNoWinner (RegicideClan);
+		MB_StopRound = True;
+	}
+	else if (Now > EndTime) 
+	{
+		if (Kings[1].Armor > Kings[2].Armor)
+		{
+		    Victory::SetRoundWinnerIfNoWinner (1);
+		}
+		else if (Kings[1].Armor < Kings[2].Armor)
+		{
+		    Victory::SetRoundWinnerIfNoWinner (2);
+		}
+		else
+		{
+		    Victory::SetRoundDrawIfNoWinner ();
+		}
+		MB_StopRound = True;
+	}
+}
+
+Void CheckMatchEndConditions ()
+{
+	if(!Victory::NoMatchWinner() || MatchEndRequested) 
+		MB_StopMatch = True;
+}
+
+Void ChooseKings ()
+{
+	Kings[1] = PlayersClan1[MathLib::Rand (0, PlayersClan1.count - 1)];
+	log ("King 1: " ^ Kings[1].Name);
+	Kings[2] = PlayersClan2[MathLib::Rand (0, PlayersClan2.count - 1)];
+	log ("King 2: " ^ Kings[2].Name);
+}
+
+Void UpdatePlayersClanArrays ()
+{
+	// Clear Arrays
+	foreach (Player in PlayersClan1)
+	{
+		if (PlayersClan1.remove(Player)) {}
+	}
+	foreach (Player in PlayersClan2)
+	{
+		if (PlayersClan2.remove(Player)) {}
+	}
+	
+	// Update Arrays
+	foreach (Player in AllPlayers)
+	{
+		if (Player.RequestedClan == 1)
+			PlayersClan1.add (Player);
+		else
+			PlayersClan2.add (Player);
+	}
+}
