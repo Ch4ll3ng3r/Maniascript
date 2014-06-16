@@ -1,0 +1,624 @@
+/*---------------------
+Mode: Hunted
+Author: racer_simon
+---------------------*/
+
+#Extends "Modes/Shootmania/ModeBase.Script.txt"
+
+#Include "TextLib" as TextLib
+#Include "MathLib" as MathLib
+#Include "Libs/Nadeo/ShootMania/SM.Script.txt" as SM
+
+#Include "Libs/Nadeo/Victory.Script.txt" as Victory
+//#Include "Libs/Nadeo/Top.Script.txt" as Top
+#Include "Libs/Nadeo/ShootMania/Score.Script.txt" as Score
+#Include "Libs/Nadeo/ShootMania/Airshot.Script.txt" as Airshot
+#Include "Libs/Nadeo/ShootMania/BalancedWeapons.Script.txt" as BalancedWeapons
+#Include "Libs/Nadeo/Shootmania/AFK.Script.txt" as AFK
+#Include "Libs/Nadeo/Shootmania/SpawnScreen.Script.txt" as SpawnScreen
+#Include "Libs/Nadeo/Message.Script.txt" as Message
+#Include "Libs/Nadeo/ScoresTable2.Script.txt" as ST2
+
+#Const CompatibleMapTypes "MeleeArena" 
+#Const Version			  "2014-05-12"
+#Const UITickPeriod	       200
+#Const ScriptName		  "Hunted.Script.txt"
+
+#Setting S_SpawnTimeForHunted  5000  as "SpawnTimeForHunted (in milliseconds)"
+#Setting S_SpawnTimeForHunters 15000 as "SpawnTimeForHunters (in milliseconds)"
+#Setting S_SpawnProtectionTime 5000  as "SpawnProtectionTime (in milliseconds)" 
+#Setting S_SpottedTime		   5000  as "SpottedTime (in milliseconds)" 
+#Setting S_RespawnTime		   5000  as "RespawnTime (in milliseconds)" 
+#Setting S_RandomHuntedOrder   True  as "RandomHuntedOrder"
+#Setting S_SurvivalBonus	   5	 as "SurvivalBonus" 
+//#Setting S_AutoSwitchWeapon    True  as "AutoSwitchWeapon (weapon change by environment)" 
+//#Setting S_RandomWeapons       False as "Hunters spawn with Random Weapons"
+#Setting S_TimeLimit		   150   as "TimeLimit (in seconds)"
+#Setting S_MaxIdleDuration     30    as "MaxIdleDuration (in seconds)" 
+#Setting S_ObjectRespawnTime   30    as "Object's RespawnTime (in seconds)"
+#Setting S_RocketAmmoMax       6     as "RocketAmmoMax"
+#Setting S_LaserAmmoMax        6     as "LaserAmmoMax"
+#Setting S_NucleusAmmoMax      6     as "NucleusAmmoMax"
+#Setting S_ArrowAmmoMax        6     as "ArrowAmmoMax"
+#Setting S_NbBots			   0     as "NumberOfBots"
+
+declare Integer NumberOfHuntedPlayers ;
+declare Text HuntedLeft;
+declare Integer ShootTime;
+declare Ident[Integer] HuntedWaitingQueue;
+declare Integer StartKey;
+declare Boolean IsMatchOver;
+declare Integer[Ident] ObjectsLastPickedUpTime;
+declare Ident[Text] ObjectsIds;
+
+***LogVersion***
+***
+MB_LogVersion(ScriptName, Version);
+MB_LogVersion(SM::GetScriptName(), SM::GetScriptVersion());
+MB_LogVersion(AFK::GetScriptName(), AFK::GetScriptVersion());
+//MB_LogVersion(Top::GetScriptName(), Top::GetScriptVersion());
+MB_LogVersion(Score::GetScriptName(), Score::GetScriptVersion());
+MB_LogVersion(Message::GetScriptName(), Message::GetScriptVersion());
+MB_LogVersion(Victory::GetScriptName(), Victory::GetScriptVersion());
+MB_LogVersion(SpawnScreen::GetScriptName(), SpawnScreen::GetScriptVersion());
+MB_LogVersion(BalancedWeapons::GetScriptName(), BalancedWeapons::GetScriptVersion());
+***
+
+/****UIPlayer***
+***
+UI.BigMessage = Airshot::Message(Player);
+****/
+
+***SleepLoop***
+***
+Message::Loop ();
+***
+	
+***InitServer***
+***
+//MB_UseLogging = True;
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+UseClans = True;
+UseForcedClans = True;
+ST2::SetStyle ("LibST_SMBaseTeams");
+ST2::SetTeamsMode (True);
+ST2::SetTeamsScoresVisibility (True);
+ST2::Build ("SM");
+declare LayerRoundInfo <=> UIManager.UILayerCreate();
+***
+
+***StartServer***
+***
+declare ModeName = "Hunted";
+declare ModeRules = "-red team are the hunted and blue team are the hunters\n-at the beginnig, all players are forced to blue\n-then hunted is/are chosen and is/are forced to red\n-hunters play with rocket and have 1 armor, hunted play with laser and the armor of one hunted is calculated by the following term: hunterscount / huntedcount\n-hunted usually spawn before hunters\n-hunters are until X seconds after spawning unvulnerable ( only at first spawning )\n-hunters respawn, killed hunted respawn as hunters\n-hunters win, when every hunted is dead before time ends , hunted win, when time limit is over\n-hunted get bonus points for surviving a round";
+SpawnScreen::CreateRules (ModeName, ModeRules);
+SpawnScreen::CreateScores();
+SpawnScreen::CreateMapInfo();
+MB_UseSectionRound = True;
+LoadObjects ();
+***
+
+***InitMap***
+***
+//Top::MatchBegin();
+Score::MatchBegin(False);	
+Airshot::MatchBegin();
+BalancedWeapons::MatchBegin();
+Victory::MatchBegin();
+Mode::Ladder_OpenMatch_All();
++++MatchBegin+++	
+		
+//UIManager.ResetAll();
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Intro;
+
+ClanScores[1] = 0;
+ClanScores[2] = 0;
+
+SetNbFakePlayers (S_NbBots, 0);
+// Get all Players at Match Begin and fill Hunted Waiting Queue
+declare Integer i = 1;
+foreach (Player in AllPlayers) 
+{
+	HuntedWaitingQueue[i] = Player.Id;
+	i += 1;
+}
+
+IsMatchOver = False;
+***
+
+***InitRound***
+***
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Playing;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+Score::RoundBegin();	
+//Top::RoundBegin();
+Airshot::RoundBegin();
+BalancedWeapons::RoundBegin();
+Victory::RoundBegin();
+SpawnObjects ();
++++RoundBegin+++
+***
+
+***StartRound***
+***
+SM::SetupDefaultVisibility ();
+declare LatestUITick = Now;
+StartTime = Now + S_SpawnTimeForHunted;
+EndTime = StartTime + S_TimeLimit * 1000;
+
+while (Players.count < 1) 
+{
+    yield;
+	UIManager.UIAll.BigMessage = "Waiting for more players";
+}
+UIManager.UIAll.BigMessage = "";
+ShootTime = 0;
+foreach (Player in Players) {
+    if (Player.CurrentClan == 1) {
+	    declare UI <=> UIManager.GetUI(Player);
+		if (UI == Null) continue;
+	    UI.Hud3dMarkers = "";
+	}
+}
+			
+// How many Hunteds?
+NumberOfHuntedPlayers = SetNumberOfHuntedPlayers();
+ 
+// Choose Hunted and Hunters
+foreach (Player in Players) 
+{
+    SetPlayerClan (Player, 1);
+}
+		    
+if (S_RandomHuntedOrder) 
+	ChooseHuntedInRandomOrder ();
+else 
+	ChooseHuntedInOrder ();
+	
+foreach (Player in AllPlayers) {
+    if (Player.CurrentClan == 2) {
+        if ( Players.count > 2)
+            Player.ArmorMax = ClansNbPlayers[1] / ClansNbPlayers[2] * 100;
+        else 
+			Player.ArmorMax = 200;
+	} 
+	else 
+		Player.ArmorMax = 100;
+}
+					     
+// Shields 		
+foreach(Player in AllPlayers) {
+   	Player.IsHighlighted = Player.Armor > 0;
+}
+
+SpawnPlayers ();
+***
+
+***PlayLoop***
+***
+HuntedLeft = "Hunted Left " ^ ClansNbPlayersAlive[2] ^ "/" ^ NumberOfHuntedPlayers;
+UIManager.UIAll.StatusMessage = HuntedLeft;
+ProcessEvents ();
+SpawnObjects ();		
+foreach(Player in Players) {
+    Player.IsHighlighted = Player.Armor > 0;
+}
+AFK::ManageAFKPlayers (S_MaxIdleDuration * 1000, S_RespawnTime);
+RespawnPlayers ();
+ManageSpottedHunted ();
+CheckRoundEndConditions ();
+***
+
+***EndRound***
+***
+StartTime = -1;
+EndTime = -1;
+ObjectDestroyAll ();
+
+if (Victory::IsRoundWinner(1)) 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose (Teams[0].ColorizedName ^ " wins the round");	
+	ClanScores[1] += 1;			
+} 
+else if (Victory::IsRoundWinner(2)) 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose (Teams[1].ColorizedName ^ " wins the round");
+	ClanScores[2] += 1;
+} 
+else 
+{
+	UIManager.UIAll.BigMessage = TextLib::Compose ("This round is a draw");
+}
+
+foreach (Player in AllPlayers)
+{
+	UnspawnPlayer (Player);
+}
+
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::EndRound;
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+			
+MB_Sleep (5000);
+
+Score::RoundEnd();			
+//Top::RoundEnd();
+Airshot::RoundEnd();
+BalancedWeapons::RoundEnd();
+Victory::RoundEnd();	
+
+CheckMatchEndConditions ();
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+***
+
+***EndMap***
+***
+UIManager.ResetAll();
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Outro;
+
+declare WinnerClan = -1;
+if ( Victory::IsMatchWinner(1) ) 
+{
+	UIManager.UIAll.BigMessage = Teams[0].ColorizedName ^ " wins the match";
+	WinnerClan = 1;
+} 
+else if (  Victory::IsMatchWinner(2) ) 
+{
+	UIManager.UIAll.BigMessage = Teams[1].ColorizedName ^ " wins the match";
+	WinnerClan = 2;
+}
+		
+MB_Sleep(6*1000);
+
+if(WinnerClan != -1)
+{
+	// Reset score clans
+	foreach (Score in Scores) { declare Integer Clan for Score; Clan = 0; }	
+	foreach (Player in Players) {
+		if (Player.Score == Null) continue;
+		declare Integer Clan for Player.Score;
+		Clan = Player.CurrentClan;				
+	}
+	// Sort scores by clan
+	declare ClanScoresSorted = [1=>CSmScore[], 2=>CSmScore[]];	
+	foreach (Score in Scores) {
+		Score.LadderRankSortValue = 1000;
+		declare Integer Clan for Score;
+		if (Clan != 1 && Clan != 2) continue;
+		ClanScoresSorted[Clan].add(Score);				
+	}	
+	declare Shift = [1=>1, 2=>1];
+	Shift[3 - WinnerClan] = 2;			
+	foreach(Index => Score in ClanScoresSorted[1]) {Score.LadderRankSortValue = Index * 2 + Shift[1];}
+	foreach(Index => Score in ClanScoresSorted[2]) {Score.LadderRankSortValue = Index * 2 + Shift[2];}			
+	
+	Mode::Ladder_CloseMatch();
+} 
+else 
+	Mode::Ladder_CancelMatch();
+		
++++EndMatch+++
+Score::MatchEnd();
+//Top::MatchEnd();	
+Airshot::MatchEnd();
+BalancedWeapons::MatchEnd();
+Victory::MatchEnd();	
+
+UIManager.UIAll.BigMessage = "";
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;				
+
+MB_Sleep(10*1000);
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.UILayers.clear();
+MB_Sleep(1*1000);
+	
+MatchEndRequested = False;
+***
+
+***EndServer***
+***
+SpawnScreen::DestroyRules ();
+SpawnScreen::DestroyScores ();
+SpawnScreen::DestroyMapInfo( );
+UIManager.UILayerDestroy(LayerRoundInfo);
+***
+	
+// Set Number Of Hunted
+Integer SetNumberOfHuntedPlayers () {
+    declare Integer NumberOfHuntedPlayers = 0;
+    if (AllPlayers.count % 8 == 0) 
+	    NumberOfHuntedPlayers = AllPlayers.count / 8;
+	else
+	    NumberOfHuntedPlayers = AllPlayers.count / 8 + 1;
+	return NumberOfHuntedPlayers;
+}
+		
+// Get Player with Id
+CSmPlayer GetPlayer (Ident Id)
+{
+    foreach (Player in AllPlayers)
+	{
+	    if (Player.Id == Id)
+		    return Player;
+	}
+	return Null;
+}
+
+// Set Hunted Ammo Max
+Integer GetHuntedAmmoMax (Integer NbHuntedPlayers)
+{
+    declare Integer HuntedAmmoMax = 0;
+    if (Players.count % (NbHuntedPlayers * 2) == 0)
+	{
+	    HuntedAmmoMax = AllPlayers.count / (NbHuntedPlayers * 2);
+	}
+	else
+	{
+	    HuntedAmmoMax = (AllPlayers.count / NbHuntedPlayers / 2) + 1;
+	}
+	return HuntedAmmoMax;
+}
+
+// Spawn Hunted before Hunters
+Void SpawnPlayers ()
+{
+	// Spawn Players
+	declare Integer SpawnIndex = MathLib::Rand (0, MapLandmarks_PlayerSpawn.count - 1);
+	foreach (Player in AllPlayers) 
+	{
+	    if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned && !Player.RequestsSpectate) 
+		{
+			if (Player.CurrentClan == 1) 
+			{
+				SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);
+		        SpawnPlayer (Player, Player.CurrentClan, 100, MapLandmarks_PlayerSpawn[SpawnIndex].PlayerSpawn, Now + S_SpawnTimeForHunters);
+			    Player.AmmoGain = 1.;
+		        SetPlayerAmmo (Player, CSmMode::EWeapon::Rocket, 1);
+	            SetPlayerAmmoMax (Player, CSmMode::EWeapon::Rocket, 4);
+			} 
+			else if (Player.CurrentClan == 2) 
+			{
+			    SetPlayerWeapon (Player, CSmMode::EWeapon::Laser, False);
+				SpawnPlayer (Player, Player.CurrentClan, Player.ArmorMax, MapLandmarks_PlayerSpawn[SpawnIndex].PlayerSpawn, Now + S_SpawnTimeForHunted) ;
+	            Player.AmmoGain = 1.;
+			    SetPlayerAmmo (Player, CSmMode::EWeapon::Laser, 1);
+			    SetPlayerAmmoMax (Player, CSmMode::EWeapon::Laser, GetHuntedAmmoMax (NumberOfHuntedPlayers));
+			} 
+			else  
+				log ("pimmel");
+		}	
+	}
+}
+
+// Respawn Hunters and switch Hunted
+Void RespawnPlayers ()
+{
+    // Respawn for Hunters
+	if (Now > StartTime + S_SpawnTimeForHunters - S_SpawnTimeForHunted)
+	{
+	    foreach (Player in AllPlayers) 
+		{
+	        if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) {
+		        if (Player.CurrentClan == 1) {
+					SetPlayerWeapon (Player, CSmMode::EWeapon::Rocket, False);	
+			        Player.ArmorMax = 100;
+			        SpawnPlayer (Player, Player.CurrentClan, 100, MapLandmarks_PlayerSpawn[MathLib::Rand ( 0, MapLandmarks_PlayerSpawn.count - 1)].PlayerSpawn, Now + S_RespawnTime);
+				    Player.AmmoGain = 1.;
+			        SetPlayerAmmo (Player, CSmMode::EWeapon::Rocket, 1);
+		            SetPlayerAmmoMax (Player, CSmMode::EWeapon::Rocket, 4);
+			    }
+			    // Move killed Hunted to Hunters
+			    if (Player.CurrentClan == 2) SetPlayerClan (Player, 1);
+		    }
+	    }
+	}
+}
+
+// Choose Hunted in random order from Hunted Waiting Queue
+Void ChooseHuntedInRandomOrder ()
+{
+	declare Integer k = 1;
+	while (k < NumberOfHuntedPlayers+1) {
+		yield;
+		if (HuntedWaitingQueue.count > 0) {
+			declare Integer Index = MathLib::Rand (1, HuntedWaitingQueue.count);
+			if (GetPlayer(HuntedWaitingQueue[Index]).CurrentClan == 1) {
+				SetPlayerClan (GetPlayer(HuntedWaitingQueue[Index]), 2);
+				HuntedWaitingQueue.removekey(Index);
+				for (i, Index, HuntedWaitingQueue.count) {
+					HuntedWaitingQueue[i] = HuntedWaitingQueue[i+1];
+				    HuntedWaitingQueue.removekey(i+1);
+				}
+			}
+		} 
+		else 
+		{
+			declare Boolean success = False;
+			while (!success) 
+			{
+				declare Integer Index = MathLib::Rand (0, AllPlayers.count-1);
+				if (AllPlayers[Index].CurrentClan == 1) {
+					SetPlayerClan (Players[Index], 2);
+					success = True;
+				}
+			}
+		}
+		k += 1;
+	}
+}
+
+// Choose the first ones from Hunted Waiting Queue
+Void ChooseHuntedInOrder ()
+{
+	for (i, 1, NumberOfHuntedPlayers) {
+		if (HuntedWaitingQueue.count > 0) {
+			SetPlayerClan (GetPlayer (HuntedWaitingQueue[1]), 2);
+			HuntedWaitingQueue.removekey(1);
+	    if (HuntedWaitingQueue.count > 0) {
+                for (i, 1, HuntedWaitingQueue.count) {
+	                HuntedWaitingQueue[i] = HuntedWaitingQueue[i+1];
+	                HuntedWaitingQueue.removekey(i+1);
+				}
+		    }
+	} 
+	else 
+	{
+		declare Boolean success = False;
+		    while (!success) {
+		        declare Integer Index = MathLib::Rand (0, AllPlayers.count);
+			    if (AllPlayers[Index].CurrentClan == 1) {
+		            SetPlayerClan (Players[Index], 2);
+					success = True;
+				}
+			}
+		}
+	}
+}
+
+// Eventhandling
+Void ProcessEvents ()
+{
+	foreach (Event in PendingEvents) 
+	{
+		if (Event.Type == CSmModeEvent::EType::OnHit) 
+		{				
+	       	if ( Event.Shooter == Null || Event.Victim == Null || Event.Shooter == Event.Victim ) 
+			    Discard(Event);
+			else if (UseClans && Event.Shooter.CurrentClan == Event.Victim.CurrentClan) 
+			    Discard(Event);			
+			else if (Now <= StartTime + (S_SpawnTimeForHunters - S_SpawnTimeForHunted) + S_SpawnProtectionTime && Event.Shooter.CurrentClan == 2) 						
+				Discard(Event); 
+			else 
+			{
+    			if(Event.Damage > 0) 
+				{
+				    Event.Damage = 100;
+				    if (Event.Shooter.CurrentClan == 1) 
+					{
+					    ShootTime = Now;
+						foreach (Player in Players) 
+						{
+						    if (Player.CurrentClan == 1) 
+							{
+							    declare UI <=> UIManager.GetUI(Player);
+							    if (UI == Null) continue;
+							    UI.Hud3dMarkers = """<marker label = "Hunted" playerlogin = {{{Event.Victim.Login}}} />""" ;
+							}
+						}
+					}
+				    Score::AddPoints (Event.Shooter, 1);									
+		            Airshot::OnHit(Event.Shooter, Event.Victim);
+					PassOn (Event);
+				}
+			}
+		} 
+		else if (Event.Type == CSmModeEvent::EType::OnArmorEmpty) 
+		{		
+			BalancedWeapons::OnOut(Event.Shooter, Event.Victim);
+		    PassOn(Event);	
+		}
+		else if (Event.Type == CSmModeEvent::EType::OnPlayerAdded) // put player in HuntedWaitingQueue
+		    HuntedWaitingQueue[HuntedWaitingQueue.count+1] = Event.Player.Id;
+		else if (Event.Type == CSmModeEvent::EType::OnPlayerRemoved) // remove player from HuntedWaitingQueue
+		{
+		    StartKey = HuntedWaitingQueue.keyof (Event.Player.Id);
+		    for (i, StartKey, HuntedWaitingQueue.count-1)
+			{
+			    HuntedWaitingQueue[i] = HuntedWaitingQueue[i+1];
+				if (HuntedWaitingQueue.removekey (i+1)) continue;
+			}
+        } 
+		else 
+			PassOn(Event);
+	}
+}
+
+// Check if round is over
+Void CheckRoundEndConditions ()
+{
+	if (AllPlayers.count > 1) 
+	{
+	    if (Now >= S_SpawnTimeForHunters + S_SpawnProtectionTime) 
+		{
+            if (ClansNbPlayersAlive[2] == 0) 
+			{
+				Victory::SetRoundWinnerIfNoWinner(1);
+				MB_StopRound = True;
+			}
+	    }
+	} 
+	if (Now >= EndTime) {
+	    if (AllPlayers.count > 1) {
+	        foreach (Player in AllPlayers) {
+		        if (Player.CurrentClan == 2) Score::AddPoints (Player, S_SurvivalBonus);
+		    }
+	        Victory::SetRoundWinnerIfNoWinner(2);
+		} 
+		else 
+		    Victory::SetRoundDrawIfNoWinner();
+		MB_StopRound = True;
+	}
+}
+
+// Remove Markers from spotted Hunted, when they survive a period of time without being hit
+Void ManageSpottedHunted ()
+{
+	if (ShootTime + S_SpottedTime < Now || Now < StartTime + S_SpawnTimeForHunters - S_SpawnTimeForHunted) 
+	{
+	    ShootTime = 0;
+		foreach (Player in AllPlayers) 
+		{
+		    if (Player.CurrentClan == 1) 
+			{
+			    declare UI <=> UIManager.GetUI(Player); 
+				if (UI == Null) continue;
+			    UI.Hud3dMarkers = "";
+			}
+		}
+	}
+}
+
+// Check if match is over
+Void CheckMatchEndConditions ()
+{
+    if (HuntedWaitingQueue.count > 0 && !MatchEndRequested)
+        IsMatchOver = False;
+	else if (AllPlayers.count > 1 || MatchEndRequested) 
+		IsMatchOver = True;
+	else 
+	    IsMatchOver = False;		
+	if (IsMatchOver) 
+	{
+		Victory::SetMatchWinnerFromScore (MB_SectionRoundNb, 1, MB_SectionRoundNb);
+		MB_StopMatch = True;
+	}
+}
+
+// Load Objects
+Void LoadObjects ()
+{
+	ItemList_Begin();
+	ObjectsIds["Armor"]	= ItemList_Add("SMCommon\\Pickups\\Armor.Item.gbx");
+	ObjectsIds["Rocket"] = ItemList_Add("SMCommon\\Pickups\\Rocket.Item.gbx");
+	ObjectsIds["Laser"]	= ItemList_Add("SMCommon\\Pickups\\Laser.Item.gbx");
+	ObjectsIds["Nucleus"] = ItemList_Add("SMCommon\\Pickups\\Nucleus.Item.gbx");
+	ObjectsIds["Arrow"] = ItemList_Add("SMCommon\\Pickups\\Arrow.Item.gbx");
+	ItemList_End();
+}
+
+Void SpawnObjects ()
+{
+	foreach (MapLandmark in MapLandmarks_ObjectAnchor) 
+	{
+		declare CSmObject Object;
+		switch (MapLandmark.Tag)
+		{
+			case "Armor": Object = ObjectCreate (ObjectsIds["Armor"]);
+			case "Rocket": Object = ObjectCreate (ObjectsIds["Rocket"]);
+			case "Laser": Object = ObjectCreate (ObjectsIds["Laser"]);
+			case "Nucleus": Object = ObjectCreate (ObjectsIds["Nucleus"]);
+			case "Arrow": Object = ObjectCreate (ObjectsIds["Arrow"]);
+		}
+		Object.SetAnchor (MapLandmark.ObjectAnchor);
+	}
+}
