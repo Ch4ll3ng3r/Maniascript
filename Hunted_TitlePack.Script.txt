@@ -20,7 +20,7 @@ Author: racer_simon
 #Include "Libs/Nadeo/ScoresTable2.Script.txt" as ST2
 
 #Const CompatibleMapTypes "MeleeArena" 
-#Const Version			  "2014-05-12"
+#Const Version			  "2014-10-19"
 #Const UITickPeriod	       200
 #Const ScriptName		  "Hunted.Script.txt"
 
@@ -158,7 +158,7 @@ foreach (Player in Players) {
     if (Player.CurrentClan == 1) {
 	    declare UI <=> UIManager.GetUI(Player);
 		if (UI == Null) continue;
-	    UI.Hud3dMarkers = "";
+	    UI.MarkersXML = "";
 	}
 }
 			
@@ -199,8 +199,7 @@ SpawnPlayers ();
 ***
 HuntedLeft = "Hunted Left " ^ ClansNbPlayersAlive[2] ^ "/" ^ NumberOfHuntedPlayers;
 UIManager.UIAll.StatusMessage = HuntedLeft;
-ProcessEvents ();
-SpawnObjects ();		
+ProcessEvents ();		
 foreach(Player in Players) {
     Player.IsHighlighted = Player.Armor > 0;
 }
@@ -379,13 +378,11 @@ Void SpawnPlayers ()
 			else if (Player.CurrentClan == 2) 
 			{
 			    SetPlayerWeapon (Player, CSmMode::EWeapon::Laser, False);
-				SpawnPlayer (Player, Player.CurrentClan, Player.ArmorMax, MapLandmarks_PlayerSpawn[SpawnIndex].PlayerSpawn, Now + S_SpawnTimeForHunted) ;
+				SpawnPlayer (Player, Player.CurrentClan, Player.ArmorMax - 100, MapLandmarks_PlayerSpawn[SpawnIndex].PlayerSpawn, Now + S_SpawnTimeForHunted) ;
 	            Player.AmmoGain = 1.;
 			    SetPlayerAmmo (Player, CSmMode::EWeapon::Laser, 1);
 			    SetPlayerAmmoMax (Player, CSmMode::EWeapon::Laser, GetHuntedAmmoMax (NumberOfHuntedPlayers));
 			} 
-			else  
-				log ("pimmel");
 		}	
 	}
 }
@@ -502,7 +499,7 @@ Void ProcessEvents ()
 							{
 							    declare UI <=> UIManager.GetUI(Player);
 							    if (UI == Null) continue;
-							    UI.Hud3dMarkers = """<marker label = "Hunted" playerlogin = {{{Event.Victim.Login}}} />""" ;
+							    UI.MarkersXML = """<marker label = "Hunted" playerlogin = {{{Event.Victim.Login}}} />""" ;
 							}
 						}
 					}
@@ -512,6 +509,16 @@ Void ProcessEvents ()
 				}
 			}
 		} 
+		else if (Event.Type == CSmModeEvent::EType::OnPlayerTouchesObject)
+		{
+			if ((Event.Player != Null) && (Event.Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) && (Event.Landmark != Null))
+			{
+				PickUpObject (Event.Player, Event.Object, Event.Landmark);
+				PassOn (Event);
+			}
+			else
+				Discard (Event);
+		}
 		else if (Event.Type == CSmModeEvent::EType::OnArmorEmpty) 
 		{		
 			BalancedWeapons::OnOut(Event.Shooter, Event.Victim);
@@ -572,7 +579,7 @@ Void ManageSpottedHunted ()
 			{
 			    declare UI <=> UIManager.GetUI(Player); 
 				if (UI == Null) continue;
-			    UI.Hud3dMarkers = "";
+			    UI.MarkersXML = "";
 			}
 		}
 	}
@@ -621,4 +628,12 @@ Void SpawnObjects ()
 		}
 		Object.SetAnchor (MapLandmark.ObjectAnchor);
 	}
+}
+
+Void PickUpObject (CSmPlayer Player, CSmObject Object, CSmMapLandmark Landmark)
+{
+	if ((Landmark.Tag == "Armor") && (Player.Armor < Player.ArmorMax))
+		AddPlayerArmor (Player, 100, Player, 1);
+	Object.SetPlayer (Player);
+	//ObjectDestroy (Object);
 }
